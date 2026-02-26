@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Chess</title>
+<style>
+body{margin:0;background:#111;color:#eee;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh}
+#board{display:grid;grid-template-columns:repeat(8,64px);grid-template-rows:repeat(8,64px);border:2px solid #555}
+.sq{width:64px;height:64px;display:flex;justify-content:center;align-items:center;font-size:40px;cursor:pointer;user-select:none}
+.light{background:#bbb}.dark{background:#444}
+#info{text-align:center;margin-top:10px}
+button{background:#333;color:#eee;border:1px solid #666;padding:6px 12px;margin:4px;cursor:pointer}
+button:hover{background:#555}
+
+/* белые фигуры */
+.whitePiece{
+  color:#fff;
+  text-shadow:0 0 4px #fff;
+}
+
+/* чёрные фигуры */
+.blackPiece{
+  color:#111;
+  text-shadow:0 0 4px #000;
+}
+
+/* выбранная фигура */
+.selectedSquare{
+  outline:3px solid #00aaff;
+}
+
+/* возможный ход */
+.moveSquare{
+  box-shadow:inset 0 0 0 4px rgba(0,255,0,0.8);
+}
+
+/* последний ход (две клетки) */
+.lastMove{
+  background:rgba(255,255,0,0.45) !important;
+}
+</style>
+</head>
+<body>
+
+<div>
+    <div id="difficultyMenu" style="text-align:center; margin-bottom:10px;">
+        <h3 style="color:#eee;">Выбери сложность</h3>
+        <button onclick="startGame('easy')">Лёгкая</button>
+        <button onclick="startGame('medium')">Средняя</button>
+        <button onclick="startGame('hard')">Сложная</button>
+        <button onclick="startGame('insane')">Невозможная</button>
+    </div>
+
+    <div id="board"></div>
+    <div id="info"></div>
+</div>
+
+<script>
+// ===============================
+// УРОВНИ СЛОЖНОСТИ
+// ===============================
+const DIFFICULTY = {
+    easy: 2,
+    medium: 3,
+    hard: 4,
+    insane: 5
+};
+
+let aiDepth = 3;
+
+// ===============================
+// ТОКСИЧНЫЕ ФРАЗЫ (редактируемые)
+// ===============================
+
+const WIN_WHITE_TEXT = [
+    "В этот раз Димка гондон идет на ХУЙ.",
+    "В этот раз Димка гондон идет на ХУЙ.",
+    "В этот раз Димка гондон идет на ХУЙ."
+];
+
+const WIN_BLACK_TEXT = [
+    "В этот раз Димка гондон идет на ХУЙ.",
+    "В этот раз Димка гондон идет на ХУЙ.",
+    "В этот раз Димка гондон идет на ХУЙ."
+];
+
+const DRAW_TEXT = [
+    "В этот раз Димка гондон идет на ХУЙ.",
+    "В этот раз Димка гондон идет на ХУЙ.",
+    "В этот раз Димка гондон идет на ХУЙ."
+];
+function toxicMessage(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+}
+
+// ===============================
+// СТАРТ ИГРЫ
+// ===============================
+
+function startGame(level) {
+    aiDepth = DIFFICULTY[level];
+    document.getElementById("difficultyMenu").style.display = "none";
+    infoEl.textContent = "Твой ход.";
+    render();
+}
+
+// ===============================
+// ШАХМАТНАЯ ЛОГИКА
+// ===============================
+
+const boardEl=document.getElementById("board");
+const infoEl=document.getElementById("info");
+
+let flip=false;
+let selected=null;
+let whiteToMove=true;
+let gameOver=false;
+let lastMoveSquares = [];
+
+let board=[
+ ['r','n','b','q','k','b','n','r'],
+ ['p','p','p','p','p','p','p','p'],
+ ['.','.','.','.','.','.','.','.'],
+ ['.','.','.','.','.','.','.','.'],
+ ['.','.','.','.','.','.','.','.'],
+ ['.','.','.','.','.','.','.','.'],
+ ['P','P','P','P','P','P','P','P'],
+ ['R','N','B','Q','K','B','N','R']
+];
+
+const U={
+ 'P':'♙','N':'♘','B':'♗','R':'♖','Q':'♕','K':'♔',
+ 'p':'♟','n':'♞','b':'♝','r':'♜','q':'♛','k':'♚'
+};
+
+const V={P:100,N:320,B:330,R:500,Q:900,K:20000,p:-100,n:-320,b:-330,r:-500,q:-900,k:-20000};
+
+function isW(p){return p===p.toUpperCase()}
+function isB(p){return p===p.toLowerCase()}
+function clone(b){return b.map(r=>r.slice())}
+
+function render(){
+ boardEl.innerHTML="";
+ for(let r=0;r<8;r++){
+  for(let c=0;c<8;c++){
+   let rr=flip?7-r:r,cc=flip?7-c:c;
+   let d=document.createElement("div");
+   d.className="sq "+((r+c)%2?"dark":"light");
+   let p=board[rr][cc];
+   if(p!=='.'){
+     d.textContent=U[p];
+     d.classList.add(isW(p) ? "whitePiece" : "blackPiece");
+   }
+   if (lastMoveSquares.some(s => s[0] === rr && s[1] === cc)) {
+     d.classList.add("lastMove");
+   }
+   d.dataset.r=rr;d.dataset.c=cc;
+   d.onclick=()=>clickSq(rr,cc);
+   boardEl.appendChild(d);
+  }
+ }
+ highlight();
+}
+
+function clickSq(r,c){
+ if(gameOver)return;
+ let p=board[r][c];
+ if(whiteToMove){
+  if(selected){
+   let [sr,sc]=selected;
+   if(sr===r&&sc===c){selected=null;highlight();return}
+   let moves=genLegal(board,true);
+   let mv=moves.find(m=>m.from[0]===sr&&m.from[1]===sc&&m.to[0]===r&&m.to[1]===c);
+   if(mv){
+    move(board,mv);
+    whiteToMove=false;
+    selected=null;
+    render();
+    check();
+    if(!gameOver)setTimeout(ai,40);
+   }else{
+    if(p&&isW(p)){selected=[r,c];highlight()}
+    else{selected=null;highlight()}
+   }
+  }else{
+   if(p&&isW(p)){selected=[r,c];highlight()}
+  }
+ }
+}
+
+function highlight(){
+ document.querySelectorAll(".sq").forEach(s=>{
+   s.classList.remove("selectedSquare","moveSquare");
+ });
+ if(!selected)return;
+ let [sr,sc]=selected;
+ document.querySelectorAll(".sq").forEach(s=>{
+  if(+s.dataset.r===sr&&+s.dataset.c===sc)s.classList.add("selectedSquare");
+ });
+ let moves=genLegal(board,whiteToMove);
+ moves.forEach(m=>{
+  if(m.from[0]===sr&&m.from[1]===sc){
+   let s=[...document.querySelectorAll(".sq")].find(x=>+x.dataset.r===m.to[0]&&+x.dataset.c===m.to[1]);
+   if(s)s.classList.add("moveSquare");
+  }
+ });
+}
+
+function move(b,m){
+ let [fr,fc]=m.from,[tr,tc]=m.to;
+ let p=b[fr][fc];
+ b[fr][fc]='.';
+ if(p==='P'&&tr===0)p='Q';
+ if(p==='p'&&tr===7)p='q';
+ b[tr][tc]=p;
+ lastMoveSquares = [[fr,fc],[tr,tc]];
+}
+
+function genMoves(b,r,c){
+ let p=b[r][c];
+ if(p==='.')return[];
+ let w=isW(p);
+ let M=[];
+ const add=(tr,tc)=>{
+  if(tr<0||tr>7||tc<0||tc>7)return;
+  let t=b[tr][tc];
+  if(t==='.'||(w&&isB(t))||(!w&&isW(t)))M.push({from:[r,c],to:[tr,tc]});
+ };
+ switch(p.toLowerCase()){
+  case'p':{
+   let d=w?-1:1;
+   if(b[r+d]&&b[r+d][c]==='.')add(r+d,c);
+   if((w&&r===6)||(!w&&r===1)){
+    if(b[r+d]&&b[r+d][c]==='.'&&b[r+2*d][c]==='.')add(r+2*d,c);
+   }
+   [[r+d,c-1],[r+d,c+1]].forEach(([tr,tc])=>{
+    if(tr>=0&&tr<8&&tc>=0&&tc<8){
+     let t=b[tr][tc];
+     if(t!=='.'&&((w&&isB(t))||(!w&&isW(t))))add(tr,tc);
+    }
+   });
+  }break;
+  case'n':{
+   [[2,1],[2,-1],[-2,1],[-2,-1],[1,2],[1,-2],[-1,2],[-1,-2]].forEach(([dr,dc])=>add(r+dr,c+dc));
+  }break;
+  case'b':{
+   [[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>{
+    let tr=r+dr,tc=c+dc;
+    while(tr>=0&&tr<8&&tc>=0&&tc<8){
+     add(tr,tc);
+     if(b[tr][tc]!=='.')break;
+     tr+=dr;tc+=dc;
+    }
+   });
+  }break;
+  case'r':{
+   [[1,0],[-1,0],[0,1],[0,-1]].forEach(([dr,dc])=>{
+    let tr=r+dr,tc=c+dc;
+    while(tr>=0&&tr<8&&tc>=0&&tc<8){
+     add(tr,tc);
+     if(b[tr][tc]!=='.')break;
+     tr+=dr;tc+=dc;
+    }
+   });
+  }break;
+  case'q':{
+   [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>{
+    let tr=r+dr,tc=c+dc;
+    while(tr>=0&&tr<8&&tc>=0&&tc<8){
+     add(tr,tc);
+     if(b[tr][tc]!=='.')break;
+     tr+=dr;tc+=dc;
+    }
+   });
+  }break;
+  case'k':{
+   [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]].forEach(([dr,dc])=>add(r+dr,c+dc));
+  }break;
+ }
+ return M;
+}
+
+function inCheck(b,w){
+ let kr=-1,kc=-1;
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  if(b[r][c]===(w?'K':'k')){kr=r;kc=c;}
+ }
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  let p=b[r][c];
+  if(p==='.'||(w&&isW(p))||(!w&&isB(p)))continue;
+  let ms=genMoves(b,r,c);
+  if(ms.some(m=>m.to[0]===kr&&m.to[1]===kc))return true;
+ }
+ return false;
+}
+
+function genLegal(b,w){
+ let L=[];
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  let p=b[r][c];
+  if(p==='.')continue;
+  if(w&&!isW(p))continue;
+  if(!w&&!isB(p))continue;
+  let ms=genMoves(b,r,c);
+  for(let m of ms){
+   let nb=clone(b);
+   move(nb,m);
+   if(!inCheck(nb,w))L.push(m);
+  }
+ }
+ return L;
+}
+
+function eval(b){
+ let s=0;
+ let mobW=0,mobB=0;
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+  let p=b[r][c];
+  if(p!=='.'){
+   s+=V[p]||0;
+  }
+ }
+ mobW=genLegal(b,true).length;
+ mobB=genLegal(b,false).length;
+ s+=(mobW-mobB)*3;
+ return s;
+}
+
+function minimax(b,d,a,beta,maxP){
+ if(d===0)return{score:eval(b)};
+ let moves=genLegal(b,maxP);
+
+ moves.sort((m1,m2)=>{
+  let t1=b[m1.to[0]][m1.to[1]];
+  let t2=b[m2.to[0]][m2.to[1]];
+  return (V[t2]||0)-(V[t1]||0);
+ });
+
+ const MAX_MOVES=20;
+ if(moves.length>MAX_MOVES)moves=moves.slice(0,MAX_MOVES);
+
+ if(moves.length===0){
+  if(inCheck(b,maxP))return{score:maxP?-999999:999999};
+  return{score:0};
+ }
+
+ let best=null;
+
+ if(maxP){
+  let max=-1e9;
+  for(let m of moves){
+   let nb=clone(b);
+   move(nb,m);
+   let r=minimax(nb,d-1,a,beta,false);
+   if(r.score>max){max=r.score;best=m;}
+   a=Math.max(a,r.score);
+   if(beta<=a)break;
+  }
+  return{score:max,move:best};
+ }else{
+  let min=1e9;
+  for(let m of moves){
+   let nb=clone(b);
+   move(nb,m);
+   let r=minimax(nb,d-1,a,beta,true);
+   if(r.score<min){min=r.score;best=m;}
+   beta=Math.min(beta,r.score);
+   if(beta<=a)break;
+  }
+  return{score:min,move:best};
+ }
+}
+
+function ai(){
+ if(gameOver)return;
+ let {move:m}=minimax(board,aiDepth,-1e9,1e9,false);
+ if(!m){check();return}
+ move(board,m);
+ whiteToMove=true;
+ render();
+ check();
+}
+
+function check(){
+ let moves=genLegal(board,whiteToMove);
+ if(moves.length===0){
+    gameOver = true;
+
+    if (inCheck(board, whiteToMove)) {
+
+        if (whiteToMove) {
+            infoEl.textContent = toxicMessage(WIN_BLACK_TEXT);
+        } else {
+            infoEl.textContent = toxicMessage(WIN_WHITE_TEXT);
+        }
+
+    } else {
+        infoEl.textContent = toxicMessage(DRAW_TEXT);
+    }
+
+    return;
+ }
+
+ infoEl.textContent=whiteToMove?"Твой ход.":"Ход соперника...";
+}
+
+render();
+</script>
+</body>
+</html>
